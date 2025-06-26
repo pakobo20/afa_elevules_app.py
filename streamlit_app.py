@@ -1,60 +1,64 @@
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import date, timedelta, datetime
 
-st.set_page_config(page_title="ÁFA Elévülés Kalkulátor", layout="centered")
+def calculate_expiry(period_end, new_proc, late, selfrev, suspend):
+    # Alap elévülés: időszak évének utolsó napja + 5 év
+    expiry = date(period_end.year, 12, 31) + timedelta(days=5*365)
 
-st.image("nav_logo.png", width=150)
-st.title("📆 ÁFA Ellenőrzési Elévülés Kalkulátor")
-st.markdown("Segít meghatározni, hogy egy adott időszak **elévült-e**, figyelembe véve az ellenőrzés joghatásait.")
+    # Hosszabbító tényezők (durva becsléssel 1 év vagy 6 hónap mindegyik)
+    if new_proc:
+        expiry += timedelta(days=365)
+    if late:
+        expiry += timedelta(days=180)
+    if selfrev:
+        expiry += timedelta(days=365)
+    if suspend:
+        expiry += timedelta(days=365)
 
-closure_date = st.date_input("🗓️ Vizsgálat várható lezárásának dátuma")
-frequency = st.selectbox("📊 ÁFA bevallás gyakorisága", ["havi", "negyedéves", "éves"])
+    return expiry
 
-new_procedure = st.checkbox("🔁 Volt új eljárás (másodfok, bírósági stb.)?")
-late_filing = st.checkbox("🐌 Történt késedelmes bevallás?")
-self_revision = st.checkbox("✏️ Volt önellenőrzés?")
-self_revision_favor = False
-if self_revision:
-    self_revision_favor = st.checkbox("📉 Az önellenőrzés az adózó **javára** szólt?")
-litigation = st.checkbox("⚖️ Volt peres vagy más nyugvást okozó eljárás?")
+def get_first_non_expired_period(closure_date, frequency, new_proc, late, selfrev, suspend):
+    today = closure_date
+    freq_months = {"havi": 1, "negyedéves": 3, "éves": 12}[frequency]
 
-def get_latest_non_expired_period(closure_date, frequency, new_procedure, late_filing, self_revision, self_revision_favor, litigation):
-    base_year = closure_date.year
-    expiry_date = datetime(base_year - 4, 12, 31)
+    # kezdjük a vizsgálat hónapjától visszafelé keresni
+    current = date(today.year, today.month, 1)
 
-    if new_procedure:
-        expiry_date += timedelta(days=365)
-    if late_filing:
-        expiry_date += timedelta(days=183)
-    if self_revision and self_revision_favor:
-        expiry_date = closure_date + timedelta(days=5*365)
-    if litigation:
-        expiry_date += timedelta(days=730)
+    while True:
+        period_end = current.replace(day=1)
+        expiry = calculate_expiry(period_end, new_proc, late, selfrev, suspend)
 
-    if closure_date > expiry_date:
-        last_expired_year = expiry_date.year
-    else:
-        last_expired_year = expiry_date.year - 1
+        if expiry >= today:
+            # ha még nem évült el, menjünk eggyel visszább
+            prev_month = current.month - freq_months
+            prev_year = current.year
+            while prev_month <= 0:
+                prev_month += 12
+                prev_year -= 1
+            current = date(prev_year, prev_month, 1)
+        else:
+            # ha elévült, akkor az utána következő az első vizsgálható
+            next_month = current.month + freq_months
+            next_year = current.year
+            while next_month > 12:
+                next_month -= 12
+                next_year += 1
+            return next_year, next_month
 
-    if frequency == "havi":
-        last_month = 12
-        last_year = last_expired_year
-    elif frequency == "negyedéves":
-        last_month = 10
-        last_year = last_expired_year
-    elif frequency == "éves":
-        last_month = 12
-        last_year = last_expired_year - 1
-    else:
-        raise ValueError("Ismeretlen gyakoriság!")
+# Streamlit app
+st.set_page_config(page_title="ÁFA elévülés kalkulátor", page_icon="📅")
+st.title("📅 ÁFA elévülés kalkulátor (Art. 202. § alapján)")
 
-    return last_year, last_month
+closure_date = st.date_input("📅 Vizsgálat lezárásának dátuma", value=date.today())
+frequency = st.selectbox("📊 Bevallás gyakorisága", ["havi", "negyedéves", "éves"])
 
-if st.button("📐 Számítás indítása"):
-    year, month = get_latest_non_expired_period(
-        closure_date, frequency, new_procedure, late_filing, self_revision, self_revision_favor, litigation
-    )
-    st.success(f"✅ Utolsó teljesen **elévült időszak**: {year}. {month:02d}")
-    next_month = (month % 12) + 1
-    next_year = year + 1 if next_month == 1 else year
-    st.info(f"📌 Vizsgálható időszak: {next_year}. {next_month:02d} hónaptól kezdődően.")
+st.markdown("Jelöld be azokat a körülményeket, amelyek hosszabbíthatják az elévülést:")
+
+new_proc = st.checkbox("🚨 Volt új eljárás?")
+late = st.checkbox("📤 Késedelmes bevallás?")
+selfrev = st.checkbox("📝 Önellenőrzés történt?")
+suspend = st.checkbox("⚖️ Volt peres vagy más nyugvásos eljárás?")
+
+if st.button("📌 Számítás indítása"):
+    y, m = get_first_non_expired_period(closure_date, frequency, new_proc, late, selfrev, suspend)
+    st.success(f"📍 Vizsgálható legkorábbi időszak: {y}. {m:02d}")
