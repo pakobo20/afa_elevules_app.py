@@ -3,7 +3,6 @@ from datetime import date, timedelta, datetime
 
 st.set_page_config(page_title="ÁFA Elévülés Kalkulátor", layout="centered")
 
-st.image("nav_logo.png", width=150)
 st.title("📆 ÁFA Ellenőrzési Elévülés Kalkulátor")
 st.markdown("Segít meghatározni, hogy egy adott időszak **elévült-e**, figyelembe véve az ellenőrzés joghatásait (önellenőrzés kizárva).")
 
