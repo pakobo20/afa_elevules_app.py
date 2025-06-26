@@ -1,79 +1,72 @@
 import streamlit as st
 from datetime import date, timedelta
-import calendar
-import streamlit as st
 
-def calculate_expiry(due_date, new_proc, late, selfrev, suspend):
-    # Alap elévülés: esedékesség évének utolsó napja + 5 év
-    expiry = date(due_date.year, 12, 31) + timedelta(days=5*365)
-    if new_proc:
-        expiry += timedelta(days=365)
-    if late:
-        expiry += timedelta(days=180)
-    if selfrev:
-        expiry += timedelta(days=365)
-    if suspend:
-        expiry += timedelta(days=365)
-    return expiry
+def calc_last_non_expired_period(today: date, freq, flags):
+    """
+    today: vizsgálat lezárásának várható dátuma
+    freq: "havi", "negyedes", "eves"
+    flags: dict kulcsokkal:
+        late_filing, new_procedure, self_rev_favor, litigation, self_rev_date, litig_start, litig_end
+    """
 
-def get_due_date(period_year, period_month, frequency):
-    if frequency == "havi":
-        due_month = period_month + 1
-        due_year = period_year
-        if due_month > 12:
-            due_month = 1
-            due_year += 1
-        return date(due_year, due_month, 20)
-    elif frequency == "negyedéves":
-        if period_month in [1, 2, 3]:
-            return date(period_year, 4, 20)
-        elif period_month in [4, 5, 6]:
-            return date(period_year, 7, 20)
-        elif period_month in [7, 8, 9]:
-            return date(period_year, 10, 20)
-        elif period_month in [10, 11, 12]:
-            return date(period_year + 1, 1, 20)
-    elif frequency == "éves":
-        return date(period_year + 1, 2, 25)
+    periods = []
 
-def get_first_non_expired_period(closure_date, frequency, new_proc, late, selfrev, suspend):
-    freq_months = {"havi": 1, "negyedéves": 3, "éves": 12}[frequency]
-    current = date(closure_date.year, closure_date.month, 1)
+    if freq == "havi":
+        periods = [(d.year, d.month) for d in
+                   (date(today.year - y, m, 1)
+                    for y in range(0,6) for m in range(1,13))]
+    elif freq == "negyedes":
+        months = [1,4,7,10]
+        periods = [(y, q) for y in range(today.year-6, today.year+1) for q in months]
+    elif freq == "eves":
+        periods = [(y, 12) for y in range(today.year-6, today.year+1)]
+    else:
+        raise ValueError
 
-    while True:
-        period_month = current.month
-        period_year = current.year
-        due_date = get_due_date(period_year, period_month, frequency)
-        expiry = calculate_expiry(due_date, new_proc, late, selfrev, suspend)
-
-        if expiry >= closure_date:
-            prev_month = current.month - freq_months
-            prev_year = current.year
-            while prev_month <= 0:
-                prev_month += 12
-                prev_year -= 1
-            current = date(prev_year, prev_month, 1)
+    non_expired = []
+    for y, m in periods:
+        period_end = date(y, m, 1)
+        # per last day of period:
+        if freq == "havi":
+            next_month = m % 12 + 1
+            next_year = y + (1 if next_month ==1 else 0)
+            period_end = date(next_year, next_month, 1) - timedelta(days=1)
         else:
-            next_month = current.month + freq_months
-            next_year = current.year
-            while next_month > 12:
-                next_month -= 12
-                next_year += 1
-            return next_year, next_month
+            period_end = date(y, m, 1) + timedelta(days=31)
+            period_end = period_end.replace(day=1) - timedelta(days=1)
 
-# Streamlit alkalmazás
-st.set_page_config(page_title="ÁFA elévülés kalkulátor", page_icon="📅")
-st.title("📅 ÁFA elévülés kalkulátor (Art. 202. § alapján)")
+        expiry = date(period_end.year, 12, 31) + timedelta(days=5*365)
 
-closure_date = st.date_input("📅 Vizsgálat lezárásának dátuma", value=date.today())
-frequency = st.selectbox("📊 Bevallás gyakorisága", ["havi", "negyedéves", "éves"])
-st.markdown("Jelöld be azokat a körülményeket, amelyek hosszabbíthatják az elévülést:")
+        # késedelmes bevallás esetén
+        if flags['late_filing']:
+            rem = (expiry - today).days
+            if rem < 183:
+                expiry += timedelta(days=183)
 
-new_proc = st.checkbox("🚨 Volt új eljárás?")
-late = st.checkbox("📤 Késedelmes bevallás?")
-selfrev = st.checkbox("📝 Önellenőrzés történt?")
-suspend = st.checkbox("⚖️ Volt peres vagy más nyugvásos eljárás?")
+        # új eljárás
+        if flags['new_procedure']:
+            expiry += timedelta(days=365)
 
-if st.button("📌 Számítás indítása"):
-    y, m = get_first_non_expired_period(closure_date, frequency, new_proc, late, selfrev, suspend)
-    st.success(f"📍 Vizsgálható legkorábbi időszak: {y}. {m:02d}")
+        # önellenőrzés az adózó javára
+        if flags['self_rev_favor']:
+            # új 5 év a önrev évének 12.31-től
+            sr_date = flags.get('self_rev_date') or today
+            expiry = date(sr_date.year, 12, 31) + timedelta(days=5*365)
+
+        # peres eljárás esetén: nyugvás
+        if flags['litigation']:
+            # ha folyamatban, várjuk be a végeredményt
+            litig_end = flags.get('litig_end')
+            if litig_end and today < litig_end:
+                expiry += (litig_end - today)  # nem számít bele
+            # lezárástól + végrehajthatóság?
+
+        if expiry >= today:
+            non_expired.append((y, m, expiry))
+
+    if not non_expired:
+        return None
+
+    # a legkisebb időszak még nem elévült
+    non_expired.sort()
+    return non_expired[0][:2]
