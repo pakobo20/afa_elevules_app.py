@@ -3,75 +3,77 @@ from datetime import date, timedelta
 
 st.set_page_config(page_title="ÁFA Elévülés Kalkulátor", layout="centered")
 
-# Logo eltávolítva, ha szükséges: # st.image("nav_logo.png", width=150)
-
 st.title("📆 ÁFA Ellenőrzési Elévülés Kalkulátor")
-st.markdown("Ez az eszköz segít meghatározni, hogy mely ÁFA időszakok **még nem évültek el** az Art. 164. § alapján.")
+st.markdown("Ez az eszköz pontosan számolja az első **nem elévült** ÁFA időszakot.")
 
 closure_date = st.date_input("🗓️ Vizsgálat várható lezárásának dátuma", value=date.today())
 frequency = st.selectbox("📊 ÁFA bevallás gyakorisága", ["havi", "negyedéves", "éves"])
-new_procedure = st.checkbox("🔁 Volt új eljárás (pl. másodfok, új eljárás)?")
-late_filing = st.checkbox("🐌 Történt késedelmes bevallás?")
-litigation = st.checkbox("⚖️ Volt peres vagy más nyugvást okozó eljárás?")
+new_procedure = st.checkbox("🔁 Volt új eljárás?")
+late_filing = st.checkbox("🐌 Késedelmes bevallás?")
+litigation = st.checkbox("⚖️ Volt peres eljárás?")
 
-def filing_deadline(year, period_month, frequency):
-    if frequency == "havi":
-        if period_month < 12:
-            return date(year, period_month + 1, 20)
-        else:
-            return date(year + 1, 1, 20)
-    elif frequency == "negyedéves":
-        if period_month == 3:
-            return date(year, 4, 20)
-        elif period_month == 6:
-            return date(year, 7, 20)
-        elif period_month == 9:
-            return date(year, 10, 20)
-        elif period_month == 12:
-            return date(year + 1, 1, 20)
-    elif frequency == "éves":
+def filing_deadline(year, pm, freq):
+    if freq == "havi":
+        nxt_month = pm + 1
+        nxt_year = year
+        if nxt_month == 13:
+            nxt_month = 1
+            nxt_year += 1
+        return date(nxt_year, nxt_month, 20)
+    if freq == "negyedéves":
+        if pm not in [3,6,9,12]:
+            raise ValueError("Negyedéves hónap csak 3,6,9,12 lehet")
+        nxt_month = pm + 1
+        nxt_year = year
+        if nxt_month == 13:
+            nxt_month = 1
+            nxt_year += 1
+        return date(nxt_year, nxt_month, 20)
+    if freq == "éves":
         return date(year + 1, 2, 25)
-    else:
-        raise ValueError("Ismeretlen gyakoriság!")
+    raise ValueError("Ismeretlen gyakoriság")
 
-def calculate_expiry(filing_deadline, new_proc, late_filing, litigation):
-    expiry = date(filing_deadline.year, 12, 31) + timedelta(days=5*365)
+def expiry_date(filing_dl, new_proc, late_filing, litigation):
+    base = date(filing_dl.year, 12, 31) + timedelta(days=5*365)
     if late_filing:
-        expiry += timedelta(days=183)
+        base += timedelta(days=183)
     if new_proc:
-        expiry += timedelta(days=365)
+        base += timedelta(days=365)
     if litigation:
-        expiry += timedelta(days=730)
-    return expiry
+        base += timedelta(days=730)
+    return base
 
-def get_first_non_expired_period(closure_date, frequency, new_proc, late_filing, litigation):
+def find_first_non_expired(closure_date, freq, new_proc, late_filing, litigation):
     today = closure_date
     earliest = None
 
-    for year in range(2000, today.year + 1):
-        if frequency == "havi":
-            periods = range(1, 13)
-        elif frequency == "negyedéves":
-            periods = [3, 6, 9, 12]
-        elif frequency == "éves":
-            periods = [12]
-        else:
-            raise ValueError("Ismeretlen gyakoriság!")
-
+    start_year = today.year - 7  # elegendő korábbi évre hátra
+    for year in range(start_year, today.year + 1):
+        periods = (
+            range(1,13) if freq=="havi" else
+            [3,6,9,12] if freq=="negyedéves" else
+            [12]
+        )
         for pm in periods:
-            fd = filing_deadline(year, pm, frequency)
-            expiry = calculate_expiry(fd, new_proc, late_filing, litigation)
-            if expiry >= today:
+            dl = filing_deadline(year, pm, freq)
+            exp = expiry_date(dl, new_proc, late_filing, litigation)
+            if exp >= today:
                 if earliest is None or (year, pm) < earliest:
                     earliest = (year, pm)
 
     return earliest
 
 if st.button("📐 Számítás indítása"):
-    result = get_first_non_expired_period(closure_date, frequency, new_procedure, late_filing, litigation)
-
+    result = find_first_non_expired(closure_date, frequency, new_procedure, late_filing, litigation)
     if result:
-        year, month = result
-        st.success(f"✅ Legkorábbi vizsgálható időszak: {year}. {month:02d} hónap")
+        year, pm = result
+        if frequency == "negyedéves":
+            start_month = pm - 2
+        elif frequency == "éves":
+            start_month = 1
+        else:
+            start_month = pm
+
+        st.success(f"✅ Legkorábbi vizsgálható időszak: {year}. {start_month:02d} hónap")
     else:
-        st.error("❌ Nem található vizsgálható időszak a megadott feltételekkel.")
+        st.error("❌ Nincs vizsgálható időszak a megadott feltételekkel.")
